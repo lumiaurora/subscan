@@ -1,0 +1,17 @@
+{
+  "otx_api_key": "",
+  "vt_api_key": "",
+  "shodan_api_key": "",
+  "defaults": {
+    "resolve": false,
+    "json": false,
+    "txt": false,
+    "output": "",
+    "threads": 20,
+    "timeout_seconds": 30,
+    "retries": 2,
+    "verbose": false,
+    "include_sources": [],
+    "exclude_sources": []
+  }
+}

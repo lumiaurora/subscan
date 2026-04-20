@@ -1,0 +1,15 @@
+# Binaries
+subscan
+subscan.exe
+
+# Build output
+dist/
+
+# Local result files
+results.json
+results.txt
+subscan-*.json
+subscan-*.txt
+
+# OS / editor noise
+.DS_Store

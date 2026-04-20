@@ -1,0 +1,350 @@
+# subscan
+
+[![CI](https://github.com/lumiaurora/subscan/actions/workflows/ci.yml/badge.svg)](https://github.com/lumiaurora/subscan/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/lumiaurora/subscan)](https://github.com/lumiaurora/subscan/releases)
+
+`subscan` is a passive subdomain enumeration CLI written in Go for security research, OSINT portfolio work, and learning. It collects subdomains from multiple public passive sources, cleans the results, optionally resolves DNS, and exports findings in JSON or TXT.
+
+## Why passive enumeration matters
+
+Passive enumeration helps map an organization's external surface area without sending aggressive traffic to the target. It is useful for:
+
+- security reconnaissance and asset discovery
+- OSINT investigations
+- lab practice and portfolio projects
+- validating known infrastructure from public data sources
+
+Because it relies on third-party public datasets, it is safer and quieter than active techniques, but it should still be used responsibly.
+
+## Features
+
+- passive-only MVP with no brute force or active probing
+- concurrent collection from multiple public sources
+- built-in support for `crt.sh`, `AlienVault OTX`, `BufferOver`, `Cert Spotter`, `HackerTarget`, `Anubis`, `urlscan`, and `RapidDNS`
+- optional `VirusTotal` and `Shodan` support via API keys
+- per-run source selection with `--source` and `--exclude-source`
+- configurable concurrency, timeout, retries, and verbose logging
+- config file support for API keys and default runtime settings
+- normalization, wildcard cleanup, domain filtering, and deduplication
+- optional concurrent DNS resolution checks with `--resolve`
+- export to JSON or TXT
+- clean terminal output with source progress and summary counts
+- resilient error handling so one source failure does not stop the run
+- cross-platform Go CLI for macOS, Linux, and Windows
+
+## Project structure
+
+```text
+subscan/
+  config.example.json
+  main.go
+  go.mod
+  README.md
+  internal/
+    config/
+      config.go
+    sources/
+      anubis.go
+      bufferover.go
+      certspotter.go
+      client.go
+      crtsh.go
+      hackertarget.go
+      otx.go
+      rapiddns.go
+      settings.go
+      shodan.go
+      urlscan.go
+      virustotal.go
+    resolver/
+      resolver.go
+    output/
+      output.go
+    utils/
+      clean.go
+      filter.go
+```
+
+## Installation
+
+Clone the repository and build it locally:
+
+```bash
+git clone https://github.com/lumiaurora/subscan.git
+cd subscan
+go build -o subscan .
+```
+
+On Windows:
+
+```powershell
+go build -o subscan.exe .
+```
+
+## Build instructions
+
+Build the binary:
+
+```bash
+go build .
+```
+
+Build all packages:
+
+```bash
+go build ./...
+```
+
+Run directly without creating a binary:
+
+```bash
+go run . -d example.com
+```
+
+## Usage
+
+```text
+subscan -d example.com [--resolve] [--json|--txt] [--output file] [--source list] [--exclude-source list]
+```
+
+`subscan` supports three configuration layers:
+
+- CLI flags for per-run behavior
+- environment variables for API keys
+- an optional JSON config file for API keys and default settings
+
+Precedence rules:
+
+- CLI flags override config file defaults
+- environment variables override API keys from the config file
+
+### Flags
+
+- `-d, --domain string`: target domain
+- `--resolve`: resolve discovered hostnames and keep only live results
+- `--json`: export results as JSON
+- `--txt`: export results as TXT
+- `--output string`: output file path
+- `--source string`: comma-separated source IDs to include
+- `--exclude-source string`: comma-separated source IDs to skip
+- `--threads int`: max concurrent source requests and DNS workers
+- `--timeout int`: HTTP and DNS timeout in seconds
+- `--retries int`: retry count for passive source requests
+- `--verbose`: show verbose runtime details
+- `--config string`: optional config file path
+- `--sources`: print the passive sources used by the tool
+
+### Source IDs
+
+Use these values with `--source` and `--exclude-source`:
+
+- `crtsh`
+- `otx`
+- `bufferover`
+- `certspotter`
+- `hackertarget`
+- `anubis`
+- `urlscan`
+- `rapiddns`
+- `virustotal` (optional, requires API key)
+- `shodan` (optional, requires API key)
+
+### API keys
+
+- `OTX_API_KEY`: helps reduce rate limiting from AlienVault OTX
+- `VT_API_KEY`: enables VirusTotal subdomain collection
+- `SHODAN_API_KEY`: enables Shodan DNS subdomain collection
+
+### Default source behavior
+
+By default, `subscan` enables these passive sources:
+
+- `crt.sh`
+- `AlienVault OTX`
+- `BufferOver`
+- `Cert Spotter`
+- `HackerTarget`
+- `Anubis`
+- `urlscan`
+- `RapidDNS`
+
+`VirusTotal` and `Shodan` are optional and are only enabled when their API keys are configured.
+
+`AlienVault OTX` runs without an API key, but public access may be rate limited. Setting `OTX_API_KEY` improves reliability.
+
+You can inspect the currently enabled source set at runtime with:
+
+```bash
+subscan --sources
+```
+
+### Config file
+
+Default config file path:
+
+- macOS and Linux: `~/.config/subscan/config.json`
+- Windows: `%AppData%\subscan\config.json`
+
+You can also pass a custom path with `--config`.
+
+An example file is included at `config.example.json`.
+
+Example:
+
+```json
+{
+  "otx_api_key": "",
+  "vt_api_key": "",
+  "shodan_api_key": "",
+  "defaults": {
+    "resolve": false,
+    "json": false,
+    "txt": false,
+    "output": "",
+    "threads": 20,
+    "timeout_seconds": 30,
+    "retries": 2,
+    "verbose": false,
+    "include_sources": ["crtsh", "certspotter", "rapiddns"],
+    "exclude_sources": ["bufferover"]
+  }
+}
+```
+
+### API key examples
+
+macOS and Linux:
+
+```bash
+export OTX_API_KEY=your_otx_key
+export VT_API_KEY=your_virustotal_key
+export SHODAN_API_KEY=your_shodan_key
+subscan --sources
+```
+
+Windows PowerShell:
+
+```powershell
+$env:OTX_API_KEY="your_otx_key"
+$env:VT_API_KEY="your_virustotal_key"
+$env:SHODAN_API_KEY="your_shodan_key"
+subscan.exe --sources
+```
+
+## Examples
+
+Basic passive enumeration:
+
+```bash
+subscan -d example.com
+```
+
+Use only a specific source set:
+
+```bash
+subscan -d example.com --source crtsh,certspotter,urlscan
+```
+
+Exclude a flaky source for one run:
+
+```bash
+subscan -d example.com --exclude-source bufferover
+```
+
+Resolve discovered hostnames:
+
+```bash
+subscan -d example.com --resolve
+```
+
+Write JSON output:
+
+```bash
+subscan -d example.com --resolve --json --output results.json
+```
+
+Write TXT output:
+
+```bash
+subscan -d example.com --txt --output results.txt
+```
+
+Tune runtime behavior:
+
+```bash
+subscan -d example.com --threads 10 --timeout 20 --retries 1 --verbose
+```
+
+Use a custom config file:
+
+```bash
+subscan --config ./config.example.json --sources
+```
+
+Show the configured passive sources:
+
+```bash
+subscan --sources
+subscan -d example.com --sources
+```
+
+## Sample output
+
+```text
+$ subscan -d example.com --resolve --json --output results.json
+[+] Target: example.com
+[+] Querying crt.sh...
+[+] Querying AlienVault OTX...
+ [+] Querying Cert Spotter...
+ [+] Querying RapidDNS...
+ [+] Querying urlscan...
+ [+] RapidDNS returned 23 candidate(s)
+ [+] Cert Spotter returned 27 candidate(s)
+ [+] urlscan returned 12 candidate(s)
+ [+] crt.sh returned 21 candidate(s)
+ [+] Raw results: 83
+ [+] Unique subdomains: 19
+ [+] Resolving discovered hosts...
+ [+] Live subdomains: 11
+[+] Results written to results.json
+
+api.example.com
+cdn.example.com
+dev.example.com
+mail.example.com
+vpn.example.com
+```
+
+## JSON output format
+
+```json
+{
+  "domain": "example.com",
+  "total_found": 11,
+  "resolved_enabled": true,
+  "subdomains": [
+    "api.example.com",
+    "cdn.example.com",
+    "dev.example.com"
+  ]
+}
+```
+
+## Source coverage notes
+
+This MVP uses public passive sources that can change, rate limit, retire, or return incomplete data over time. The tool is designed to continue running when one source fails, but enumeration quality depends on the availability and freshness of those public datasets.
+
+Some providers are best-effort only. For example, public OTX access may return `429 Too Many Requests`, and BufferOver has been intermittently unavailable from some networks. `subscan` now includes additional passive sources so one flaky provider does not make the tool unusable.
+
+## Architecture
+
+- `main.go`: CLI parsing, config loading, source selection, orchestration, and terminal UX
+- `internal/config`: JSON config file loading and default config path handling
+- `internal/sources`: passive source clients, shared HTTP logic, retries, API key handling, and verbose request diagnostics
+- `internal/utils`: normalization, wildcard cleanup, filtering, and deduplication
+- `internal/resolver`: concurrent DNS resolution with configurable worker and timeout settings
+- `internal/output`: TXT and JSON exporters
+
+## Disclaimer
+
+`subscan` is for passive enumeration, authorized security research, OSINT, and learning purposes. Do not use it to violate laws, terms of service, or organizational policies. Always obtain permission where required.
