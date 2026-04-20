@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a new feature or workflow improvement.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Please focus on the user problem and expected outcome.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user need or workflow gap does this solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior, CLI flags, output changes, or workflow you want
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing workarounds or other approaches you considered
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope notes
+      description: Note whether this stays passive-only and whether docs/tests would need updates
