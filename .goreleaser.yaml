@@ -59,3 +59,43 @@ release:
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
+
+homebrew_casks:
+  - repository:
+      owner: lumiaurora
+      name: homebrew-tap
+      token: "{{ .Env.PACKAGE_PUBLISH_TOKEN }}"
+      branch: main
+    binaries:
+      - subscan
+    homepage: https://github.com/lumiaurora/subscan
+    description: Passive subdomain enumeration CLI for OSINT and security research
+    license: MIT
+    url:
+      verified: github.com/lumiaurora/subscan/
+    caveats: |
+      subscan is currently distributed as an unsigned binary.
+      If Gatekeeper blocks execution after install, rerun:
+        xattr -dr com.apple.quarantine "$(brew --prefix)/Caskroom/subscan/latest/subscan"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/subscan"]
+          end
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+
+scoops:
+  - repository:
+      owner: lumiaurora
+      name: scoop-bucket
+      token: "{{ .Env.PACKAGE_PUBLISH_TOKEN }}"
+      branch: main
+    homepage: https://github.com/lumiaurora/subscan
+    description: Passive subdomain enumeration CLI for OSINT and security research
+    license: MIT
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com

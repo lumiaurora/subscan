@@ -19,15 +19,17 @@ Because it relies on third-party public datasets, it is safer and quieter than a
 
 ## Features
 
-- passive-only MVP with no brute force or active probing
+- passive-only by design with no brute force or active probing
 - concurrent collection from multiple public sources
 - built-in support for `crt.sh`, `AlienVault OTX`, `BufferOver`, `Cert Spotter`, `HackerTarget`, `Anubis`, `urlscan`, and `RapidDNS`
 - optional `VirusTotal` and `Shodan` support via API keys
+- batch input support from files or stdin
 - per-run source selection with `--source` and `--exclude-source`
 - configurable concurrency, timeout, retries, and verbose logging
 - config file support for API keys and default runtime settings
 - source health reporting with `enabled`, `disabled`, `degraded`, `auth-required`, and `rate-limited` states
 - fixture-backed parser tests for every passive source
+- CI coverage for `go test`, `go test -race`, Goreleaser config validation, and opt-in live integration tests
 - normalization, wildcard cleanup, domain filtering, and deduplication
 - optional concurrent DNS resolution checks with wildcard DNS filtering when `--resolve` is enabled
 - rich JSON reports with timestamps, source attribution, source timings, and DNS details
@@ -78,6 +80,20 @@ subscan/
 
 Download the latest release archive from [GitHub Releases](https://github.com/lumiaurora/subscan/releases), then verify it with the published `checksums.txt` file.
 
+Install with Homebrew:
+
+```bash
+brew tap lumiaurora/tap
+brew install --cask subscan
+```
+
+Install with Scoop:
+
+```powershell
+scoop bucket add lumiaurora https://github.com/lumiaurora/scoop-bucket
+scoop install subscan
+```
+
 Build from source locally:
 
 Clone the repository and build it locally:
@@ -124,6 +140,8 @@ go run . --version
 
 ```text
 subscan -d example.com [--resolve] [--json|--txt] [--output file] [--source list] [--exclude-source list]
+subscan --input domains.txt [--resolve] [--json|--txt] [--output file]
+cat domains.txt | subscan --json --output results.json
 subscan --version
 ```
 
@@ -141,6 +159,7 @@ Precedence rules:
 ### Flags
 
 - `-d, --domain string`: target domain
+- `-i, --input string`: read target domains from a file or `-` for stdin
 - `--resolve`: resolve discovered hostnames and keep only live results
 - `--json`: export results as JSON
 - `--txt`: export results as TXT
@@ -262,6 +281,18 @@ Basic passive enumeration:
 
 ```bash
 subscan -d example.com
+```
+
+Batch enumeration from a file:
+
+```bash
+subscan --input domains.txt --resolve --json --output results.json
+```
+
+Batch enumeration from stdin:
+
+```bash
+cat domains.txt | subscan --txt --output results.txt
 ```
 
 Use only a specific source set:
@@ -425,6 +456,50 @@ vpn.example.com
 }
 ```
 
+For multi-target runs, JSON output is wrapped in a batch report:
+
+```json
+{
+  "timestamp": "2026-04-20T10:45:00Z",
+  "total_targets": 2,
+  "resolved_enabled": true,
+  "metadata": {
+    "started_at": "2026-04-20T10:44:55Z",
+    "completed_at": "2026-04-20T10:45:00Z",
+    "duration_ms": 5000,
+    "successful_targets": 1,
+    "failed_targets": 1
+  },
+  "results": [
+    {
+      "domain": "example.com",
+      "timestamp": "2026-04-20T10:44:58Z",
+      "total_found": 3,
+      "resolved_enabled": true,
+      "metadata": {
+        "started_at": "2026-04-20T10:44:55Z",
+        "completed_at": "2026-04-20T10:44:58Z",
+        "duration_ms": 3000,
+        "raw_results": 12,
+        "unique_subdomains": 5,
+        "final_subdomains": 3,
+        "enabled_sources": [],
+        "source_timings": []
+      },
+      "subdomains": []
+    }
+  ],
+  "failed_targets": [
+    {
+      "domain": "bad target",
+      "error": "invalid domain"
+    }
+  ]
+}
+```
+
+For multi-target TXT output, each line uses `domain,subdomain` format.
+
 ## Source coverage notes
 
 `subscan` uses public passive sources that can change, rate limit, retire, or return incomplete data over time. The tool is designed to continue running when one source fails, but enumeration quality depends on the availability and freshness of those public datasets.
@@ -448,6 +523,30 @@ Releases are built with Goreleaser.
 - tagged releases publish cross-platform archives
 - `checksums.txt` is attached to each release
 - binaries include embedded version, commit, build date, and builder metadata
+- Homebrew casks are published to `lumiaurora/homebrew-tap`
+- Scoop manifests are published to `lumiaurora/scoop-bucket`
+
+## Testing
+
+Run the standard test suite:
+
+```bash
+go test ./...
+```
+
+Run the race detector:
+
+```bash
+go test -race ./...
+```
+
+Run live integration tests manually:
+
+```bash
+SUBSCAN_RUN_LIVE_TESTS=1 SUBSCAN_LIVE_DOMAIN=cloudflare.com go test -tags=integration ./...
+```
+
+GitHub Actions also includes a manual `Integration` workflow for live passive-source checks.
 
 ## Disclaimer
 

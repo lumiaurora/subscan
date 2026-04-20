@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MIT license and changelog tracking.
 - `--version` flag with embedded build metadata.
 - Goreleaser-based release automation with archives and checksums.
+- Batch input support from files and stdin.
+- Multi-target JSON and TXT export behavior.
+- Race detector coverage in CI.
+- Manual live integration workflow and integration test harness.
+- Homebrew tap publishing and Scoop bucket publishing via Goreleaser.
 
 ## [1.0.1] - 2026-04-20
 

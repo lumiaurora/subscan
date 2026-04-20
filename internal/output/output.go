@@ -17,6 +17,28 @@ type Report struct {
 	Subdomains      []Subdomain `json:"subdomains"`
 }
 
+type BatchReport struct {
+	Timestamp       time.Time       `json:"timestamp"`
+	TotalTargets    int             `json:"total_targets"`
+	ResolvedEnabled bool            `json:"resolved_enabled"`
+	Metadata        BatchMetadata   `json:"metadata"`
+	Results         []Report        `json:"results"`
+	FailedTargets   []TargetFailure `json:"failed_targets,omitempty"`
+}
+
+type BatchMetadata struct {
+	StartedAt         time.Time `json:"started_at"`
+	CompletedAt       time.Time `json:"completed_at"`
+	DurationMS        int64     `json:"duration_ms"`
+	SuccessfulTargets int       `json:"successful_targets"`
+	FailedTargets     int       `json:"failed_targets"`
+}
+
+type TargetFailure struct {
+	Domain string `json:"domain"`
+	Error  string `json:"error"`
+}
+
 type RunMetadata struct {
 	StartedAt        time.Time         `json:"started_at"`
 	CompletedAt      time.Time         `json:"completed_at"`
@@ -79,7 +101,30 @@ func WriteTXT(path string, subdomains []string) error {
 	return writer.Flush()
 }
 
-func WriteJSON(path string, report Report) error {
+func WriteBatchTXT(path string, reports []Report) error {
+	if err := ensureParentDir(path); err != nil {
+		return err
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	for _, report := range reports {
+		for _, subdomain := range report.Subdomains {
+			if _, err := writer.WriteString(report.Domain + "," + subdomain.Name + "\n"); err != nil {
+				return err
+			}
+		}
+	}
+
+	return writer.Flush()
+}
+
+func WriteJSON(path string, payload any) error {
 	if err := ensureParentDir(path); err != nil {
 		return err
 	}
@@ -92,7 +137,7 @@ func WriteJSON(path string, report Report) error {
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(report)
+	return encoder.Encode(payload)
 }
 
 func ensureParentDir(path string) error {

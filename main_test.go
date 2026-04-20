@@ -2,7 +2,11 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/lumiaurora/subscan/internal/output"
 )
 
 func TestSelectSourcesIncludeExclude(t *testing.T) {
@@ -69,6 +73,48 @@ func TestAggregateSourceEntriesTracksAttribution(t *testing.T) {
 
 	if !slices.Equal(attribution["api.example.com"], []string{"Cert Spotter", "crt.sh"}) {
 		t.Fatalf("unexpected attribution for api.example.com: %v", attribution["api.example.com"])
+	}
+}
+
+func TestParseTargetLinesSkipsCommentsAndDeduplicates(t *testing.T) {
+	input := strings.NewReader("\n# comment\nExample.com\nexample.com\nsecond.example\n")
+	got, err := parseTargetLines(input)
+	if err != nil {
+		t.Fatalf("parseTargetLines returned error: %v", err)
+	}
+
+	want := []string{"Example.com", "second.example"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+}
+
+func TestPrepareTargetsSeparatesInvalidDomains(t *testing.T) {
+	targets, invalid := prepareTargets([]string{"Example.com", "bad domain", "example.com", "*.api.example.com"})
+	if !slices.Equal(targets, []string{"example.com", "api.example.com"}) {
+		t.Fatalf("unexpected prepared targets: %v", targets)
+	}
+
+	if len(invalid) != 1 || invalid[0].Domain != "bad domain" {
+		t.Fatalf("unexpected invalid targets: %v", invalid)
+	}
+}
+
+func TestBuildBatchReportCountsTargets(t *testing.T) {
+	startedAt := time.Unix(100, 0).UTC()
+	completedAt := startedAt.Add(2 * time.Second)
+	report := buildBatchReport([]output.Report{{Domain: "example.com"}}, []output.TargetFailure{{Domain: "bad", Error: "invalid domain"}}, true, startedAt, completedAt)
+
+	if report.TotalTargets != 2 {
+		t.Fatalf("expected total targets 2, got %d", report.TotalTargets)
+	}
+
+	if report.Metadata.SuccessfulTargets != 1 || report.Metadata.FailedTargets != 1 {
+		t.Fatalf("unexpected batch metadata: %+v", report.Metadata)
+	}
+
+	if !report.ResolvedEnabled {
+		t.Fatalf("expected resolved flag to be true")
 	}
 }
 

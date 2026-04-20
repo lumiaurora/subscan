@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -42,6 +44,18 @@ type sourceResult struct {
 	duration time.Duration
 }
 
+type scanOptions struct {
+	resolve bool
+	threads int
+	timeout time.Duration
+	verbose bool
+}
+
+type targetScanResult struct {
+	report       output.Report
+	finalResults []string
+}
+
 var sourceRegistry = []sourceDefinition{
 	{id: "crtsh", name: "crt.sh", aliases: []string{"crt.sh", "crtsh"}, fetch: sources.FetchCRTSh},
 	{id: "otx", name: "AlienVault OTX", aliases: []string{"otx", "alienvault", "alienvault-otx"}, fetch: sources.FetchOTX},
@@ -74,11 +88,14 @@ func main() {
 	flag.Usage = func() {
 		name := filepath.Base(os.Args[0])
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s -d example.com [--resolve] [--json|--txt] [--output file] [--source list] [--exclude-source list]\n", name)
+		fmt.Fprintf(flag.CommandLine.Output(), "       %s --input domains.txt [--resolve] [--json|--txt] [--output file]\n", name)
+		fmt.Fprintf(flag.CommandLine.Output(), "       cat domains.txt | %s --json --output results.json\n", name)
 		fmt.Fprintf(flag.CommandLine.Output(), "       %s --version\n\n", name)
 		fmt.Fprintln(flag.CommandLine.Output(), "Flags:")
 		flag.PrintDefaults()
 		fmt.Fprintln(flag.CommandLine.Output(), "\nExamples:")
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s -d example.com\n", name)
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s --input domains.txt --resolve\n", name)
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s -d example.com --resolve --threads 10\n", name)
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s -d example.com --source crtsh,certspotter,urlscan\n", name)
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s -d example.com --exclude-source bufferover\n", name)
@@ -90,6 +107,8 @@ func main() {
 	var (
 		domainShort    = flag.String("d", "", "target domain")
 		domainLong     = flag.String("domain", "", "target domain")
+		inputShort     = flag.String("i", "", "read target domains from file or '-' for stdin")
+		inputLong      = flag.String("input", "", "read target domains from file or '-' for stdin")
 		versionFlag    = flag.Bool("version", false, "print version and build information")
 		resolveFlag    = flag.Bool("resolve", configBool(configFile.Defaults.Resolve, false), "resolve discovered subdomains")
 		jsonFlag       = flag.Bool("json", configBool(configFile.Defaults.JSON, false), "export results as JSON")
@@ -111,9 +130,15 @@ func main() {
 	_ = versionFlag
 
 	domain := pickDomain(*domainShort, *domainLong)
+	inputPath := pickInput(*inputShort, *inputLong)
 	includeList := parseCSVList(*includeSources)
 	excludeList := parseCSVList(*excludeSources)
 	timeout := time.Duration(*timeoutFlag) * time.Second
+	stdinInput := stdinHasData()
+
+	if strings.TrimSpace(domain) != "" && strings.TrimSpace(inputPath) != "" {
+		usageError(errors.New("use either --domain or --input, not both"))
+	}
 
 	if *threadsFlag <= 0 {
 		usageError(errors.New("--threads must be greater than 0"))
@@ -154,74 +179,97 @@ func main() {
 
 	if *sourcesFlag {
 		printSources(sourceRegistry, selectedSources)
-		if domain == "" {
+		if strings.TrimSpace(domain) == "" && strings.TrimSpace(inputPath) == "" && !stdinInput {
 			return
 		}
 	}
 
-	if domain == "" {
-		usageError(errors.New("a target domain is required"))
-	}
-
-	domain = normalizeTargetDomain(domain)
-	if !isValidDomain(domain) {
-		usageError(fmt.Errorf("invalid domain %q", domain))
-	}
-
-	format, path, err := determineOutput(*jsonFlag, *txtFlag, *outputPath, domain)
+	targetInputs, err := collectTargetInputs(domain, inputPath, stdinInput)
 	if err != nil {
 		usageError(err)
 	}
 
-	runStartedAt := time.Now().UTC()
-
-	fmt.Printf("[+] Target: %s\n", domain)
-
-	sourceResults, hadSuccess := querySources(domain, selectedSources, *threadsFlag, *verboseFlag)
-	if !hadSuccess {
-		fmt.Fprintln(os.Stderr, "[!] All passive sources failed. No results were collected.")
-		os.Exit(1)
+	if len(targetInputs) == 0 {
+		usageError(errors.New("a target domain is required"))
 	}
 
-	rawResults, unique, attribution := aggregateSourceEntries(domain, sourceResults)
-	fmt.Printf("[+] Raw results: %d\n", rawResults)
-
-	fmt.Printf("[+] Unique subdomains: %d\n", len(unique))
-
-	finalResults := unique
-	resolveResult := resolver.Result{}
-	if *resolveFlag {
-		fmt.Println("[+] Resolving discovered hosts...")
-		resolveResult = resolver.ResolveSubdomains(unique, resolver.Options{
-			Workers:       *threadsFlag,
-			LookupTimeout: timeout,
-			TargetDomain:  domain,
-		})
-		finalResults = resolveResult.Live
-		if resolveResult.WildcardFiltered > 0 {
-			fmt.Printf("[+] Wildcard-filtered subdomains: %d\n", resolveResult.WildcardFiltered)
+	targets, invalidTargets := prepareTargets(targetInputs)
+	if len(targets) == 0 {
+		if len(invalidTargets) == 1 {
+			usageError(fmt.Errorf("invalid domain %q", invalidTargets[0].Domain))
 		}
-		fmt.Printf("[+] Live subdomains: %d\n", len(finalResults))
+
+		fatalError(errors.New("no valid targets were provided"))
 	}
 
-	completedAt := time.Now().UTC()
-	reportSubdomains := buildReportSubdomains(finalResults, attribution, resolveResult.Details)
-	runMetadata := buildRunMetadata(selectedSources, sourceResults, runStartedAt, completedAt, rawResults, len(unique), len(finalResults), resolveResult.WildcardFiltered)
+	batchMode := len(targets)+len(invalidTargets) > 1
+	outputLabel := targets[0]
+	if batchMode {
+		outputLabel = "batch"
+	}
+
+	format, path, err := determineOutput(*jsonFlag, *txtFlag, *outputPath, outputLabel)
+	if err != nil {
+		usageError(err)
+	}
+
+	batchStartedAt := time.Now().UTC()
+	scanResults := make([]output.Report, 0, len(targets))
+	failedTargets := append([]output.TargetFailure(nil), invalidTargets...)
+	options := scanOptions{
+		resolve: *resolveFlag,
+		threads: *threadsFlag,
+		timeout: timeout,
+		verbose: *verboseFlag,
+	}
+
+	for _, failure := range invalidTargets {
+		fmt.Printf("[!] %s: %s\n", failure.Domain, failure.Error)
+	}
+
+	for index, target := range targets {
+		if batchMode {
+			fmt.Printf("[+] Target %d/%d: %s\n", index+1, len(targets), target)
+		} else {
+			fmt.Printf("[+] Target: %s\n", target)
+		}
+
+		scanResult, err := executeTargetScan(target, selectedSources, options)
+		if err != nil {
+			failure := output.TargetFailure{Domain: target, Error: err.Error()}
+			failedTargets = append(failedTargets, failure)
+			fmt.Printf("[!] %s\n", err)
+			if !batchMode {
+				os.Exit(1)
+			}
+			fmt.Println()
+			continue
+		}
+
+		scanResults = append(scanResults, scanResult.report)
+		printSubdomains(scanResult.finalResults)
+
+		if batchMode && index < len(targets)-1 {
+			fmt.Println()
+		}
+	}
+
+	batchCompletedAt := time.Now().UTC()
 
 	if path != "" {
 		switch format {
 		case "json":
-			report := output.Report{
-				Domain:          domain,
-				Timestamp:       completedAt,
-				TotalFound:      len(reportSubdomains),
-				ResolvedEnabled: *resolveFlag,
-				Metadata:        runMetadata,
-				Subdomains:      reportSubdomains,
+			if batchMode {
+				err = output.WriteJSON(path, buildBatchReport(scanResults, failedTargets, *resolveFlag, batchStartedAt, batchCompletedAt))
+			} else {
+				err = output.WriteJSON(path, scanResults[0])
 			}
-			err = output.WriteJSON(path, report)
 		case "txt":
-			err = output.WriteTXT(path, finalResults)
+			if batchMode {
+				err = output.WriteBatchTXT(path, scanResults)
+			} else {
+				err = output.WriteTXT(path, reportNames(scanResults[0]))
+			}
 		}
 
 		if err != nil {
@@ -232,7 +280,14 @@ func main() {
 		fmt.Printf("[+] Results written to %s\n", path)
 	}
 
-	printSubdomains(finalResults)
+	if batchMode {
+		fmt.Printf("[+] Successful targets: %d\n", len(scanResults))
+		fmt.Printf("[+] Failed targets: %d\n", len(failedTargets))
+	}
+
+	if len(scanResults) == 0 {
+		os.Exit(1)
+	}
 }
 
 func querySources(domain string, sourceList []sourceDefinition, threads int, verbose bool) ([]sourceResult, bool) {
@@ -291,6 +346,48 @@ func querySources(domain string, sourceList []sourceDefinition, threads int, ver
 	})
 
 	return completedResults, hadSuccess
+}
+
+func executeTargetScan(domain string, selectedSources []sourceDefinition, options scanOptions) (targetScanResult, error) {
+	runStartedAt := time.Now().UTC()
+
+	sourceResults, hadSuccess := querySources(domain, selectedSources, options.threads, options.verbose)
+	if !hadSuccess {
+		return targetScanResult{}, fmt.Errorf("target %s failed: all passive sources failed", domain)
+	}
+
+	rawResults, unique, attribution := aggregateSourceEntries(domain, sourceResults)
+	fmt.Printf("[+] Raw results: %d\n", rawResults)
+	fmt.Printf("[+] Unique subdomains: %d\n", len(unique))
+
+	finalResults := unique
+	resolveResult := resolver.Result{}
+	if options.resolve {
+		fmt.Println("[+] Resolving discovered hosts...")
+		resolveResult = resolver.ResolveSubdomains(unique, resolver.Options{
+			Workers:       options.threads,
+			LookupTimeout: options.timeout,
+			TargetDomain:  domain,
+		})
+		finalResults = resolveResult.Live
+		if resolveResult.WildcardFiltered > 0 {
+			fmt.Printf("[+] Wildcard-filtered subdomains: %d\n", resolveResult.WildcardFiltered)
+		}
+		fmt.Printf("[+] Live subdomains: %d\n", len(finalResults))
+	}
+
+	completedAt := time.Now().UTC()
+	reportSubdomains := buildReportSubdomains(finalResults, attribution, resolveResult.Details)
+	report := output.Report{
+		Domain:          domain,
+		Timestamp:       completedAt,
+		TotalFound:      len(reportSubdomains),
+		ResolvedEnabled: options.resolve,
+		Metadata:        buildRunMetadata(selectedSources, sourceResults, runStartedAt, completedAt, rawResults, len(unique), len(finalResults), resolveResult.WildcardFiltered),
+		Subdomains:      reportSubdomains,
+	}
+
+	return targetScanResult{report: report, finalResults: finalResults}, nil
 }
 
 func aggregateSourceEntries(domain string, sourceResults []sourceResult) (int, []string, map[string][]string) {
@@ -392,6 +489,32 @@ func buildRunMetadata(selectedSources []sourceDefinition, sourceResults []source
 		FailedSources:    failedSources,
 		SourceTimings:    timings,
 	}
+}
+
+func buildBatchReport(results []output.Report, failedTargets []output.TargetFailure, resolvedEnabled bool, startedAt time.Time, completedAt time.Time) output.BatchReport {
+	return output.BatchReport{
+		Timestamp:       completedAt,
+		TotalTargets:    len(results) + len(failedTargets),
+		ResolvedEnabled: resolvedEnabled,
+		Metadata: output.BatchMetadata{
+			StartedAt:         startedAt,
+			CompletedAt:       completedAt,
+			DurationMS:        completedAt.Sub(startedAt).Milliseconds(),
+			SuccessfulTargets: len(results),
+			FailedTargets:     len(failedTargets),
+		},
+		Results:       results,
+		FailedTargets: failedTargets,
+	}
+}
+
+func reportNames(report output.Report) []string {
+	names := make([]string, 0, len(report.Subdomains))
+	for _, subdomain := range report.Subdomains {
+		names = append(names, subdomain.Name)
+	}
+
+	return names
 }
 
 func selectSources(registry []sourceDefinition, include []string, exclude []string) ([]sourceDefinition, error) {
@@ -573,6 +696,99 @@ func hasVersionFlag(args []string) bool {
 	}
 
 	return false
+}
+
+func pickInput(short string, long string) string {
+	if strings.TrimSpace(short) != "" {
+		return short
+	}
+
+	return long
+}
+
+func collectTargetInputs(domain string, inputPath string, stdinInput bool) ([]string, error) {
+	if strings.TrimSpace(domain) != "" {
+		return []string{domain}, nil
+	}
+
+	if strings.TrimSpace(inputPath) != "" {
+		if strings.TrimSpace(inputPath) == "-" {
+			return parseTargetLines(os.Stdin)
+		}
+
+		file, err := os.Open(inputPath)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+
+		return parseTargetLines(file)
+	}
+
+	if stdinInput {
+		return parseTargetLines(os.Stdin)
+	}
+
+	return nil, nil
+}
+
+func parseTargetLines(reader io.Reader) ([]string, error) {
+	scanner := bufio.NewScanner(reader)
+	targets := make([]string, 0)
+	seen := make(map[string]struct{})
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		normalized := strings.ToLower(line)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+
+		seen[normalized] = struct{}{}
+		targets = append(targets, line)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return targets, nil
+}
+
+func prepareTargets(targetInputs []string) ([]string, []output.TargetFailure) {
+	targets := make([]string, 0, len(targetInputs))
+	invalid := make([]output.TargetFailure, 0)
+	seen := make(map[string]struct{}, len(targetInputs))
+
+	for _, target := range targetInputs {
+		normalized := normalizeTargetDomain(target)
+		if !isValidDomain(normalized) {
+			invalid = append(invalid, output.TargetFailure{Domain: strings.TrimSpace(target), Error: "invalid domain"})
+			continue
+		}
+
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+
+		seen[normalized] = struct{}{}
+		targets = append(targets, normalized)
+	}
+
+	return targets, invalid
+}
+
+func stdinHasData() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+
+	return info.Mode()&os.ModeCharDevice == 0
 }
 
 func pickDomain(short string, long string) string {
