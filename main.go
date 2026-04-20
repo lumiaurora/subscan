@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lumiaurora/subscan/internal/buildinfo"
 	"github.com/lumiaurora/subscan/internal/config"
 	"github.com/lumiaurora/subscan/internal/output"
 	"github.com/lumiaurora/subscan/internal/resolver"
@@ -55,6 +56,11 @@ var sourceRegistry = []sourceDefinition{
 }
 
 func main() {
+	if hasVersionFlag(os.Args[1:]) {
+		fmt.Println(buildinfo.Current().String())
+		return
+	}
+
 	configArg, configExplicit, err := discoverConfigPath(os.Args[1:])
 	if err != nil {
 		fatalError(err)
@@ -67,7 +73,8 @@ func main() {
 
 	flag.Usage = func() {
 		name := filepath.Base(os.Args[0])
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s -d example.com [--resolve] [--json|--txt] [--output file] [--source list] [--exclude-source list]\n\n", name)
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s -d example.com [--resolve] [--json|--txt] [--output file] [--source list] [--exclude-source list]\n", name)
+		fmt.Fprintf(flag.CommandLine.Output(), "       %s --version\n\n", name)
 		fmt.Fprintln(flag.CommandLine.Output(), "Flags:")
 		flag.PrintDefaults()
 		fmt.Fprintln(flag.CommandLine.Output(), "\nExamples:")
@@ -76,12 +83,14 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s -d example.com --source crtsh,certspotter,urlscan\n", name)
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s -d example.com --exclude-source bufferover\n", name)
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s -d example.com --json --output results.json\n", name)
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s --version\n", name)
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s --sources\n", name)
 	}
 
 	var (
 		domainShort    = flag.String("d", "", "target domain")
 		domainLong     = flag.String("domain", "", "target domain")
+		versionFlag    = flag.Bool("version", false, "print version and build information")
 		resolveFlag    = flag.Bool("resolve", configBool(configFile.Defaults.Resolve, false), "resolve discovered subdomains")
 		jsonFlag       = flag.Bool("json", configBool(configFile.Defaults.JSON, false), "export results as JSON")
 		txtFlag        = flag.Bool("txt", configBool(configFile.Defaults.TXT, false), "export results as TXT")
@@ -99,6 +108,7 @@ func main() {
 	flag.Parse()
 
 	_ = configPathFlag
+	_ = versionFlag
 
 	domain := pickDomain(*domainShort, *domainLong)
 	includeList := parseCSVList(*includeSources)
@@ -553,6 +563,16 @@ func discoverConfigPath(args []string) (string, bool, error) {
 	}
 
 	return "", false, nil
+}
+
+func hasVersionFlag(args []string) bool {
+	for _, argument := range args {
+		if argument == "--version" || argument == "-version" {
+			return true
+		}
+	}
+
+	return false
 }
 
 func pickDomain(short string, long string) string {

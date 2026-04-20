@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/lumiaurora/subscan/actions/workflows/ci.yml/badge.svg)](https://github.com/lumiaurora/subscan/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/lumiaurora/subscan)](https://github.com/lumiaurora/subscan/releases)
+[![License](https://img.shields.io/github/license/lumiaurora/subscan)](LICENSE)
 
 `subscan` is a passive subdomain enumeration CLI written in Go for security research, OSINT portfolio work, and learning. It collects subdomains from multiple public passive sources, cleans the results, optionally resolves DNS, and exports findings in JSON or TXT.
 
@@ -39,11 +40,16 @@ Because it relies on third-party public datasets, it is safer and quieter than a
 
 ```text
 subscan/
+  .goreleaser.yaml
+  CHANGELOG.md
+  LICENSE
   config.example.json
   main.go
   go.mod
   README.md
   internal/
+    buildinfo/
+      buildinfo.go
     config/
       config.go
     sources/
@@ -69,6 +75,10 @@ subscan/
 ```
 
 ## Installation
+
+Download the latest release archive from [GitHub Releases](https://github.com/lumiaurora/subscan/releases), then verify it with the published `checksums.txt` file.
+
+Build from source locally:
 
 Clone the repository and build it locally:
 
@@ -104,10 +114,17 @@ Run directly without creating a binary:
 go run . -d example.com
 ```
 
+Print build information:
+
+```bash
+go run . --version
+```
+
 ## Usage
 
 ```text
 subscan -d example.com [--resolve] [--json|--txt] [--output file] [--source list] [--exclude-source list]
+subscan --version
 ```
 
 `subscan` supports three configuration layers:
@@ -134,6 +151,7 @@ Precedence rules:
 - `--timeout int`: HTTP and DNS timeout in seconds
 - `--retries int`: retry count for passive source requests
 - `--verbose`: show verbose runtime details
+- `--version`: print version and build metadata
 - `--config string`: optional config file path
 - `--sources`: print the passive sources used by the tool
 
@@ -295,6 +313,12 @@ subscan --sources
 subscan -d example.com --sources
 ```
 
+Print version/build metadata:
+
+```bash
+subscan --version
+```
+
 ## Sample output
 
 ```text
@@ -411,10 +435,19 @@ Some providers are best-effort only. For example, public OTX access may return `
 
 - `main.go`: CLI parsing, config loading, source selection, orchestration, and terminal UX
 - `internal/config`: JSON config file loading and default config path handling
+- `internal/buildinfo`: embedded version, commit, build date, and builder metadata
 - `internal/sources`: passive source clients, source-specific parsing, health classification, retries/backoff, API key handling, and verbose request diagnostics
 - `internal/utils`: normalization, wildcard cleanup, filtering, and deduplication
 - `internal/resolver`: concurrent DNS resolution with configurable worker and timeout settings plus wildcard DNS detection
 - `internal/output`: TXT and JSON exporters
+
+## Release automation
+
+Releases are built with Goreleaser.
+
+- tagged releases publish cross-platform archives
+- `checksums.txt` is attached to each release
+- binaries include embedded version, commit, build date, and builder metadata
 
 ## Disclaimer
 
