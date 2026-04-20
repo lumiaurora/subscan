@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-20
+
 ### Added
 
 - MIT license and changelog tracking.
@@ -17,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Race detector coverage in CI.
 - Manual live integration workflow and integration test harness.
 - Homebrew tap publishing and Scoop bucket publishing via Goreleaser.
+- Release SBOM generation for published archives.
+- Sigstore-signed checksum bundles for releases.
+- GitHub provenance attestations for release artifacts.
+- Optional macOS signing/notarization wiring for future Apple credentials.
 
 ## [1.0.1] - 2026-04-20
 

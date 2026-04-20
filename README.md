@@ -522,9 +522,40 @@ Releases are built with Goreleaser.
 
 - tagged releases publish cross-platform archives
 - `checksums.txt` is attached to each release
+- `checksums.txt.sigstore.json` is attached as a keyless Sigstore signature bundle for the checksums file
+- SBOM files are generated for release archives
 - binaries include embedded version, commit, build date, and builder metadata
+- GitHub build provenance attestations are published for release artifacts
 - Homebrew casks are published to `lumiaurora/homebrew-tap`
 - Scoop manifests are published to `lumiaurora/scoop-bucket`
+
+### Verifying signed checksums
+
+Install `cosign`, then verify the published bundle against `checksums.txt`:
+
+```bash
+cosign verify-blob --bundle checksums.txt.sigstore.json checksums.txt
+```
+
+### Verifying provenance attestations
+
+Use the GitHub CLI to verify release provenance:
+
+```bash
+gh attestation verify --repo lumiaurora/subscan subscan_1.0.2_linux_amd64.tar.gz
+```
+
+### macOS signing and notarization
+
+The release pipeline is ready to sign and notarize macOS binaries when these GitHub Actions secrets are configured:
+
+- `MACOS_SIGN_P12`
+- `MACOS_SIGN_PASSWORD`
+- `MACOS_NOTARY_KEY`
+- `MACOS_NOTARY_KEY_ID`
+- `MACOS_NOTARY_ISSUER_ID`
+
+Until those secrets are set, Homebrew releases still include the quarantine-removal workaround for unsigned binaries.
 
 ## Testing
 
