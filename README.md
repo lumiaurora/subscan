@@ -29,6 +29,7 @@ Because it relies on third-party public datasets, it is safer and quieter than a
 - fixture-backed parser tests for every passive source
 - normalization, wildcard cleanup, domain filtering, and deduplication
 - optional concurrent DNS resolution checks with wildcard DNS filtering when `--resolve` is enabled
+- rich JSON reports with timestamps, source attribution, source timings, and DNS details
 - export to JSON or TXT
 - clean terminal output with source progress and summary counts
 - resilient error handling so one source failure does not stop the run
@@ -328,12 +329,74 @@ vpn.example.com
 ```json
 {
   "domain": "example.com",
+  "timestamp": "2026-04-20T10:15:04Z",
   "total_found": 11,
   "resolved_enabled": true,
+  "metadata": {
+    "started_at": "2026-04-20T10:15:01Z",
+    "completed_at": "2026-04-20T10:15:04Z",
+    "duration_ms": 2145,
+    "raw_results": 83,
+    "unique_subdomains": 19,
+    "final_subdomains": 11,
+    "wildcard_filtered": 2,
+    "enabled_sources": [
+      {
+        "id": "crtsh",
+        "name": "crt.sh"
+      },
+      {
+        "id": "certspotter",
+        "name": "Cert Spotter"
+      }
+    ],
+    "failed_sources": [
+      {
+        "id": "otx",
+        "name": "AlienVault OTX",
+        "health": "rate-limited",
+        "error": "AlienVault OTX is rate limiting anonymous requests; set OTX_API_KEY to improve reliability",
+        "duration_ms": 801
+      }
+    ],
+    "source_timings": [
+      {
+        "id": "crtsh",
+        "name": "crt.sh",
+        "status": "success",
+        "candidates": 21,
+        "duration_ms": 632
+      },
+      {
+        "id": "otx",
+        "name": "AlienVault OTX",
+        "status": "rate-limited",
+        "candidates": 0,
+        "duration_ms": 801
+      }
+    ]
+  },
   "subdomains": [
-    "api.example.com",
-    "cdn.example.com",
-    "dev.example.com"
+    {
+      "name": "api.example.com",
+      "sources": [
+        "crt.sh",
+        "Cert Spotter"
+      ],
+      "ips": [
+        "93.184.216.34"
+      ],
+      "cnames": [
+        "edge.example.net"
+      ]
+    },
+    {
+      "name": "cdn.example.com",
+      "sources": [
+        "RapidDNS",
+        "urlscan"
+      ]
+    }
   ]
 }
 ```

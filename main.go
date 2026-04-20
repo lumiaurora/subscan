@@ -34,6 +34,7 @@ type sourceDefinition struct {
 }
 
 type sourceResult struct {
+	index    int
 	source   sourceDefinition
 	entries  []string
 	err      error
@@ -162,25 +163,26 @@ func main() {
 		usageError(err)
 	}
 
+	runStartedAt := time.Now().UTC()
+
 	fmt.Printf("[+] Target: %s\n", domain)
 
-	rawEntries, hadSuccess := querySources(domain, selectedSources, *threadsFlag, *verboseFlag)
+	sourceResults, hadSuccess := querySources(domain, selectedSources, *threadsFlag, *verboseFlag)
 	if !hadSuccess {
 		fmt.Fprintln(os.Stderr, "[!] All passive sources failed. No results were collected.")
 		os.Exit(1)
 	}
 
-	fmt.Printf("[+] Raw results: %d\n", len(rawEntries))
-
-	unique := utils.Deduplicate(utils.FilterSubdomains(utils.NormalizeEntries(rawEntries), domain))
-	sort.Strings(unique)
+	rawResults, unique, attribution := aggregateSourceEntries(domain, sourceResults)
+	fmt.Printf("[+] Raw results: %d\n", rawResults)
 
 	fmt.Printf("[+] Unique subdomains: %d\n", len(unique))
 
 	finalResults := unique
+	resolveResult := resolver.Result{}
 	if *resolveFlag {
 		fmt.Println("[+] Resolving discovered hosts...")
-		resolveResult := resolver.ResolveSubdomains(unique, resolver.Options{
+		resolveResult = resolver.ResolveSubdomains(unique, resolver.Options{
 			Workers:       *threadsFlag,
 			LookupTimeout: timeout,
 			TargetDomain:  domain,
@@ -192,14 +194,20 @@ func main() {
 		fmt.Printf("[+] Live subdomains: %d\n", len(finalResults))
 	}
 
+	completedAt := time.Now().UTC()
+	reportSubdomains := buildReportSubdomains(finalResults, attribution, resolveResult.Details)
+	runMetadata := buildRunMetadata(selectedSources, sourceResults, runStartedAt, completedAt, rawResults, len(unique), len(finalResults), resolveResult.WildcardFiltered)
+
 	if path != "" {
 		switch format {
 		case "json":
 			report := output.Report{
 				Domain:          domain,
-				TotalFound:      len(finalResults),
+				Timestamp:       completedAt,
+				TotalFound:      len(reportSubdomains),
 				ResolvedEnabled: *resolveFlag,
-				Subdomains:      finalResults,
+				Metadata:        runMetadata,
+				Subdomains:      reportSubdomains,
 			}
 			err = output.WriteJSON(path, report)
 		case "txt":
@@ -217,16 +225,16 @@ func main() {
 	printSubdomains(finalResults)
 }
 
-func querySources(domain string, sourceList []sourceDefinition, threads int, verbose bool) ([]string, bool) {
+func querySources(domain string, sourceList []sourceDefinition, threads int, verbose bool) ([]sourceResult, bool) {
 	results := make(chan sourceResult, len(sourceList))
 	sem := make(chan struct{}, threads)
 	var wg sync.WaitGroup
 
-	for _, source := range sourceList {
+	for index, source := range sourceList {
 		fmt.Printf("[+] Querying %s...\n", source.name)
 		wg.Add(1)
 
-		go func(source sourceDefinition) {
+		go func(index int, source sourceDefinition) {
 			defer wg.Done()
 
 			sem <- struct{}{}
@@ -234,8 +242,8 @@ func querySources(domain string, sourceList []sourceDefinition, threads int, ver
 
 			startedAt := time.Now()
 			entries, err := source.fetch(domain)
-			results <- sourceResult{source: source, entries: entries, err: err, duration: time.Since(startedAt)}
-		}(source)
+			results <- sourceResult{index: index, source: source, entries: entries, err: err, duration: time.Since(startedAt)}
+		}(index, source)
 	}
 
 	go func() {
@@ -243,10 +251,12 @@ func querySources(domain string, sourceList []sourceDefinition, threads int, ver
 		close(results)
 	}()
 
-	allEntries := make([]string, 0)
+	completedResults := make([]sourceResult, 0, len(sourceList))
 	hadSuccess := false
 
 	for result := range results {
+		completedResults = append(completedResults, result)
+
 		if result.err != nil {
 			health := sources.ErrorHealth(result.err)
 			message := sources.ErrorMessage(result.err)
@@ -264,10 +274,114 @@ func querySources(domain string, sourceList []sourceDefinition, threads int, ver
 		} else {
 			fmt.Printf("[+] %s returned %d candidate(s)\n", result.source.name, len(result.entries))
 		}
-		allEntries = append(allEntries, result.entries...)
 	}
 
-	return allEntries, hadSuccess
+	sort.Slice(completedResults, func(i int, j int) bool {
+		return completedResults[i].index < completedResults[j].index
+	})
+
+	return completedResults, hadSuccess
+}
+
+func aggregateSourceEntries(domain string, sourceResults []sourceResult) (int, []string, map[string][]string) {
+	rawResults := 0
+	attributionSets := make(map[string]map[string]struct{})
+
+	for _, result := range sourceResults {
+		if result.err != nil {
+			continue
+		}
+
+		rawResults += len(result.entries)
+		cleaned := utils.Deduplicate(utils.FilterSubdomains(utils.NormalizeEntries(result.entries), domain))
+		for _, entry := range cleaned {
+			if _, ok := attributionSets[entry]; !ok {
+				attributionSets[entry] = make(map[string]struct{})
+			}
+
+			attributionSets[entry][result.source.name] = struct{}{}
+		}
+	}
+
+	unique := make([]string, 0, len(attributionSets))
+	attribution := make(map[string][]string, len(attributionSets))
+	for subdomain, sourceSet := range attributionSets {
+		unique = append(unique, subdomain)
+
+		sourcesForSubdomain := make([]string, 0, len(sourceSet))
+		for sourceName := range sourceSet {
+			sourcesForSubdomain = append(sourcesForSubdomain, sourceName)
+		}
+
+		sort.Strings(sourcesForSubdomain)
+		attribution[subdomain] = sourcesForSubdomain
+	}
+
+	sort.Strings(unique)
+	return rawResults, unique, attribution
+}
+
+func buildReportSubdomains(subdomains []string, attribution map[string][]string, details map[string]resolver.Resolution) []output.Subdomain {
+	reportSubdomains := make([]output.Subdomain, 0, len(subdomains))
+	for _, subdomain := range subdomains {
+		entry := output.Subdomain{
+			Name:    subdomain,
+			Sources: attribution[subdomain],
+		}
+
+		if detail, ok := details[subdomain]; ok {
+			entry.IPs = detail.IPs
+			entry.CNAMEs = detail.CNAMEs
+		}
+
+		reportSubdomains = append(reportSubdomains, entry)
+	}
+
+	return reportSubdomains
+}
+
+func buildRunMetadata(selectedSources []sourceDefinition, sourceResults []sourceResult, startedAt time.Time, completedAt time.Time, rawResults int, uniqueCount int, finalCount int, wildcardFiltered int) output.RunMetadata {
+	enabledSources := make([]output.SourceReference, 0, len(selectedSources))
+	for _, source := range selectedSources {
+		enabledSources = append(enabledSources, output.SourceReference{ID: source.id, Name: source.name})
+	}
+
+	failedSources := make([]output.FailedSource, 0)
+	timings := make([]output.SourceTiming, 0, len(sourceResults))
+	for _, result := range sourceResults {
+		status := "success"
+		if result.err != nil {
+			status = string(sources.ErrorHealth(result.err))
+			failedSources = append(failedSources, output.FailedSource{
+				ID:         result.source.id,
+				Name:       result.source.name,
+				Health:     status,
+				Error:      sources.ErrorMessage(result.err),
+				DurationMS: result.duration.Milliseconds(),
+			})
+		}
+
+		timings = append(timings, output.SourceTiming{
+			ID:         result.source.id,
+			Name:       result.source.name,
+			Status:     status,
+			Candidates: len(result.entries),
+			DurationMS: result.duration.Milliseconds(),
+		})
+	}
+
+	return output.RunMetadata{
+		StartedAt:        startedAt,
+		CompletedAt:      completedAt,
+		DurationMS:       completedAt.Sub(startedAt).Milliseconds(),
+		RawResults:       rawResults,
+		UniqueSubdomains: uniqueCount,
+		FinalSubdomains:  finalCount,
+		WildcardFiltered: wildcardFiltered,
+		EnabledSources:   enabledSources,
+		FailedSources:    failedSources,
+		SourceTimings:    timings,
+	}
 }
 
 func selectSources(registry []sourceDefinition, include []string, exclude []string) ([]sourceDefinition, error) {

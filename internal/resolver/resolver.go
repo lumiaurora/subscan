@@ -22,19 +22,26 @@ type Options struct {
 	LookupTimeout time.Duration
 	TargetDomain  string
 	LookupHost    func(context.Context, string) ([]string, error)
+	LookupCNAME   func(context.Context, string) (string, error)
 	RandomLabel   func() string
+}
+
+type Resolution struct {
+	IPs    []string
+	CNAMEs []string
 }
 
 type Result struct {
 	Live              []string
+	Details           map[string]Resolution
 	WildcardFiltered  int
 	WildcardProtected []string
 }
 
 type lookupResult struct {
-	index     int
-	addresses []string
-	live      bool
+	index      int
+	resolution Resolution
+	live       bool
 }
 
 type wildcardResult struct {
@@ -53,9 +60,14 @@ func ResolveSubdomains(subdomains []string, options Options) Result {
 	}
 
 	lookupHost := options.LookupHost
+	lookupCNAME := options.LookupCNAME
 	if lookupHost == nil {
-		resolver := net.Resolver{}
-		lookupHost = resolver.LookupHost
+		defaultResolver := net.Resolver{}
+		lookupHost = defaultResolver.LookupHost
+		lookupCNAME = defaultResolver.LookupCNAME
+	} else if lookupCNAME == nil {
+		defaultResolver := net.Resolver{}
+		lookupCNAME = defaultResolver.LookupCNAME
 	}
 
 	jobs := make(chan int)
@@ -77,11 +89,8 @@ func ResolveSubdomains(subdomains []string, options Options) Result {
 			defer wg.Done()
 
 			for index := range jobs {
-				ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
-				addresses, err := lookupHost(ctx, subdomains[index])
-				cancel()
-
-				results <- lookupResult{index: index, addresses: normalizeAddresses(addresses), live: err == nil && len(addresses) > 0}
+				resolution, live := resolveHost(subdomains[index], lookupTimeout, lookupHost, lookupCNAME)
+				results <- lookupResult{index: index, resolution: resolution, live: live}
 			}
 		}()
 	}
@@ -96,22 +105,24 @@ func ResolveSubdomains(subdomains []string, options Options) Result {
 		close(results)
 	}()
 
-	resolved := make(map[int][]string, len(subdomains))
+	resolved := make(map[int]Resolution, len(subdomains))
 	for result := range results {
 		if result.live {
-			resolved[result.index] = result.addresses
+			resolved[result.index] = result.resolution
 		}
 	}
 
 	if options.TargetDomain == "" {
 		live := make([]string, 0, len(resolved))
+		details := make(map[string]Resolution, len(resolved))
 		for index, subdomain := range subdomains {
-			if _, ok := resolved[index]; ok {
+			if resolution, ok := resolved[index]; ok {
 				live = append(live, subdomain)
+				details[subdomain] = resolution
 			}
 		}
 
-		return Result{Live: live}
+		return Result{Live: live, Details: details}
 	}
 
 	randomLabel := options.RandomLabel
@@ -121,34 +132,50 @@ func ResolveSubdomains(subdomains []string, options Options) Result {
 
 	cache := make(map[string]wildcardResult)
 	live := make([]string, 0, len(resolved))
+	details := make(map[string]Resolution, len(resolved))
 	protected := make([]string, 0)
 
 	for index, subdomain := range subdomains {
-		addresses, ok := resolved[index]
+		resolution, ok := resolved[index]
 		if !ok {
 			continue
 		}
 
-		if wildcardOnly(subdomain, addresses, options.TargetDomain, lookupTimeout, lookupHost, randomLabel, cache) {
+		if wildcardOnly(subdomain, resolution, options.TargetDomain, lookupTimeout, lookupHost, lookupCNAME, randomLabel, cache) {
 			protected = append(protected, subdomain)
 			continue
 		}
 
 		live = append(live, subdomain)
+		details[subdomain] = resolution
 	}
 
 	return Result{
 		Live:              live,
+		Details:           details,
 		WildcardFiltered:  len(protected),
 		WildcardProtected: protected,
 	}
 }
 
-func wildcardOnly(host string, addresses []string, targetDomain string, lookupTimeout time.Duration, lookupHost func(context.Context, string) ([]string, error), randomLabel func() string, cache map[string]wildcardResult) bool {
+func resolveHost(host string, lookupTimeout time.Duration, lookupHost func(context.Context, string) ([]string, error), lookupCNAME func(context.Context, string) (string, error)) (Resolution, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+	addresses, err := lookupHost(ctx, host)
+	cancel()
+	if err != nil || len(addresses) == 0 {
+		return Resolution{}, false
+	}
+
+	resolution := Resolution{IPs: normalizeValues(addresses)}
+	resolution.CNAMEs = lookupCanonicalNames(host, lookupTimeout, lookupCNAME)
+	return resolution, true
+}
+
+func wildcardOnly(host string, resolution Resolution, targetDomain string, lookupTimeout time.Duration, lookupHost func(context.Context, string) ([]string, error), lookupCNAME func(context.Context, string) (string, error), randomLabel func() string, cache map[string]wildcardResult) bool {
 	for _, zone := range candidateWildcardZones(host, targetDomain) {
 		result, ok := cache[zone]
 		if !ok {
-			result = detectWildcard(zone, lookupTimeout, lookupHost, randomLabel)
+			result = detectWildcard(zone, lookupTimeout, lookupHost, lookupCNAME, randomLabel)
 			cache[zone] = result
 		}
 
@@ -156,7 +183,7 @@ func wildcardOnly(host string, addresses []string, targetDomain string, lookupTi
 			continue
 		}
 
-		if _, ok := result.signatures[addressSignature(addresses)]; ok {
+		if _, ok := result.signatures[resolutionSignature(resolution)]; ok {
 			return true
 		}
 	}
@@ -185,21 +212,19 @@ func candidateWildcardZones(host string, targetDomain string) []string {
 	return zones
 }
 
-func detectWildcard(zone string, lookupTimeout time.Duration, lookupHost func(context.Context, string) ([]string, error), randomLabel func() string) wildcardResult {
+func detectWildcard(zone string, lookupTimeout time.Duration, lookupHost func(context.Context, string) ([]string, error), lookupCNAME func(context.Context, string) (string, error), randomLabel func() string) wildcardResult {
 	signatures := make(map[string]struct{}, wildcardSamples)
 	resolvedSamples := 0
 
 	for sample := 0; sample < wildcardSamples; sample++ {
 		host := randomLabel() + "." + zone
-		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
-		addresses, err := lookupHost(ctx, host)
-		cancel()
-		if err != nil || len(addresses) == 0 {
+		resolution, live := resolveHost(host, lookupTimeout, lookupHost, lookupCNAME)
+		if !live {
 			continue
 		}
 
 		resolvedSamples++
-		signatures[addressSignature(normalizeAddresses(addresses))] = struct{}{}
+		signatures[resolutionSignature(resolution)] = struct{}{}
 	}
 
 	return wildcardResult{
@@ -208,33 +233,54 @@ func detectWildcard(zone string, lookupTimeout time.Duration, lookupHost func(co
 	}
 }
 
-func normalizeAddresses(addresses []string) []string {
-	if len(addresses) == 0 {
+func lookupCanonicalNames(host string, lookupTimeout time.Duration, lookupCNAME func(context.Context, string) (string, error)) []string {
+	if lookupCNAME == nil {
 		return nil
 	}
 
-	seen := make(map[string]struct{}, len(addresses))
-	normalized := make([]string, 0, len(addresses))
-	for _, address := range addresses {
-		address = strings.TrimSpace(strings.ToLower(address))
-		if address == "" {
+	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+	cname, err := lookupCNAME(ctx, host)
+	cancel()
+	if err != nil {
+		return nil
+	}
+
+	cname = strings.TrimSpace(strings.TrimSuffix(strings.ToLower(cname), "."))
+	host = strings.TrimSpace(strings.TrimSuffix(strings.ToLower(host), "."))
+	if cname == "" || cname == host {
+		return nil
+	}
+
+	return []string{cname}
+}
+
+func normalizeValues(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(strings.ToLower(strings.TrimSuffix(value, ".")))
+		if value == "" {
 			continue
 		}
 
-		if _, ok := seen[address]; ok {
+		if _, ok := seen[value]; ok {
 			continue
 		}
 
-		seen[address] = struct{}{}
-		normalized = append(normalized, address)
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
 	}
 
 	sort.Strings(normalized)
 	return normalized
 }
 
-func addressSignature(addresses []string) string {
-	return strings.Join(normalizeAddresses(addresses), ",")
+func resolutionSignature(resolution Resolution) string {
+	return strings.Join(resolution.IPs, ",") + "|" + strings.Join(resolution.CNAMEs, ",")
 }
 
 func generateRandomLabel() string {

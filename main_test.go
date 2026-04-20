@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -38,4 +39,41 @@ func TestParseCSVListDeduplicates(t *testing.T) {
 			t.Fatalf("entry %d: want %q, got %q", index, want[index], got[index])
 		}
 	}
+}
+
+func TestAggregateSourceEntriesTracksAttribution(t *testing.T) {
+	results := []sourceResult{
+		{
+			source:  sourceDefinition{name: "crt.sh"},
+			entries: []string{"WWW.example.com", "*.api.example.com", "invalid.org"},
+		},
+		{
+			source:  sourceDefinition{name: "Cert Spotter"},
+			entries: []string{"api.example.com", "mail.example.com", "mail.example.com"},
+		},
+		{
+			source: sourceDefinition{name: "AlienVault OTX"},
+			err:    errSentinel{},
+		},
+	}
+
+	rawCount, unique, attribution := aggregateSourceEntries("example.com", results)
+	if rawCount != 6 {
+		t.Fatalf("expected raw count 6, got %d", rawCount)
+	}
+
+	wantUnique := []string{"api.example.com", "mail.example.com", "www.example.com"}
+	if !slices.Equal(unique, wantUnique) {
+		t.Fatalf("expected unique %v, got %v", wantUnique, unique)
+	}
+
+	if !slices.Equal(attribution["api.example.com"], []string{"Cert Spotter", "crt.sh"}) {
+		t.Fatalf("unexpected attribution for api.example.com: %v", attribution["api.example.com"])
+	}
+}
+
+type errSentinel struct{}
+
+func (errSentinel) Error() string {
+	return "boom"
 }

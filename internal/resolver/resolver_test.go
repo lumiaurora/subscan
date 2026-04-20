@@ -44,12 +44,19 @@ func TestResolveSubdomainsFiltersWildcardHosts(t *testing.T) {
 	if !slices.Equal(result.WildcardProtected, []string{"ghost.example.com"}) {
 		t.Fatalf("unexpected wildcard-protected hosts: %v", result.WildcardProtected)
 	}
+
+	if got := result.Details["real.example.com"].IPs; !slices.Equal(got, []string{"2.2.2.2"}) {
+		t.Fatalf("unexpected IP details for real.example.com: %v", got)
+	}
 }
 
 func TestResolveSubdomainsWithoutTargetDomainSkipsWildcardChecks(t *testing.T) {
 	result := ResolveSubdomains([]string{"one.example.com"}, Options{
 		LookupHost: func(ctx context.Context, host string) ([]string, error) {
 			return []string{"1.1.1.1"}, nil
+		},
+		LookupCNAME: func(ctx context.Context, host string) (string, error) {
+			return "edge.example.net.", nil
 		},
 	})
 
@@ -59,5 +66,14 @@ func TestResolveSubdomainsWithoutTargetDomainSkipsWildcardChecks(t *testing.T) {
 
 	if result.WildcardFiltered != 0 {
 		t.Fatalf("expected no wildcard filtering without target domain")
+	}
+
+	detail := result.Details["one.example.com"]
+	if !slices.Equal(detail.IPs, []string{"1.1.1.1"}) {
+		t.Fatalf("unexpected IPs: %v", detail.IPs)
+	}
+
+	if !slices.Equal(detail.CNAMEs, []string{"edge.example.net"}) {
+		t.Fatalf("unexpected CNAMEs: %v", detail.CNAMEs)
 	}
 }
