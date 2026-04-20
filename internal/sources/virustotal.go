@@ -1,13 +1,20 @@
 package sources
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
+	"time"
 )
 
 const (
 	maxVirusTotalPages = 5
 )
+
+var virusTotalRequestConfig = requestConfig{
+	RetryBaseDelay: 5 * time.Second,
+}
 
 type virusTotalResponse struct {
 	Data []struct {
@@ -24,21 +31,54 @@ func FetchVirusTotal(domain string) ([]string, error) {
 	headers := map[string]string{"x-apikey": currentOptions().VTAPIKey}
 
 	for page := 0; page < maxVirusTotalPages; page++ {
-		var response virusTotalResponse
-		if err := fetchJSONWithHeaders(requestURL, headers, &response); err != nil {
-			return nil, err
+		body, err := fetchBody(requestURL, headers, "application/json", virusTotalRequestConfig)
+		if err != nil {
+			return nil, classifyVirusTotalError(err)
 		}
 
-		for _, entry := range response.Data {
-			results = append(results, entry.ID)
+		pageResults, nextURL, err := parseVirusTotalResponse(body)
+		if err != nil {
+			return nil, degradedSourceError("VirusTotal returned invalid JSON", err)
 		}
 
-		if response.Links.Next == "" {
+		results = append(results, pageResults...)
+
+		if nextURL == "" {
 			break
 		}
 
-		requestURL = response.Links.Next
+		requestURL = nextURL
 	}
 
 	return results, nil
+}
+
+func parseVirusTotalResponse(body []byte) ([]string, string, error) {
+	var response virusTotalResponse
+	if err := decodeJSON(body, &response); err != nil {
+		return nil, "", err
+	}
+
+	results := make([]string, 0, len(response.Data))
+	for _, entry := range response.Data {
+		results = append(results, entry.ID)
+	}
+
+	return results, response.Links.Next, nil
+}
+
+func classifyVirusTotalError(err error) error {
+	switch {
+	case IsStatusCode(err, 429):
+		return rateLimitedSourceError("VirusTotal is rate limiting requests", err)
+	case IsStatusCode(err, 401), IsStatusCode(err, 403):
+		return authRequiredSourceError("VirusTotal rejected the configured API key", err)
+	default:
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			return degradedSourceError("VirusTotal returned malformed JSON", err)
+		}
+
+		return degradedSourceError("VirusTotal request failed", err)
+	}
 }

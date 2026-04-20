@@ -23,32 +23,32 @@ var httpClient = &http.Client{
 }
 
 func fetchJSON(requestURL string, target any) error {
-	return fetchJSONWithHeaders(requestURL, nil, target)
+	return fetchJSONWithOptions(requestURL, nil, defaultRequestConfig, target)
 }
 
 func fetchJSONWithHeaders(requestURL string, headers map[string]string, target any) error {
-	body, err := fetchBody(requestURL, headers, "application/json")
+	return fetchJSONWithOptions(requestURL, headers, defaultRequestConfig, target)
+}
+
+func fetchJSONWithOptions(requestURL string, headers map[string]string, config requestConfig, target any) error {
+	body, err := fetchBody(requestURL, headers, "application/json", config)
 	if err != nil {
 		return err
 	}
 
-	if len(body) == 0 {
-		return nil
-	}
-
-	if err := json.Unmarshal(body, target); err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-
-	return nil
+	return decodeJSON(body, target)
 }
 
 func fetchText(requestURL string) (string, error) {
-	return fetchTextWithHeaders(requestURL, nil)
+	return fetchTextWithOptions(requestURL, nil, defaultRequestConfig)
 }
 
 func fetchTextWithHeaders(requestURL string, headers map[string]string) (string, error) {
-	body, err := fetchBody(requestURL, headers, "text/plain, application/json;q=0.9, */*;q=0.8")
+	return fetchTextWithOptions(requestURL, headers, defaultRequestConfig)
+}
+
+func fetchTextWithOptions(requestURL string, headers map[string]string, config requestConfig) (string, error) {
+	body, err := fetchBody(requestURL, headers, "text/plain, application/json;q=0.9, */*;q=0.8", config)
 	if err != nil {
 		return "", err
 	}
@@ -56,12 +56,12 @@ func fetchTextWithHeaders(requestURL string, headers map[string]string) (string,
 	return string(body), nil
 }
 
-func fetchBody(requestURL string, headers map[string]string, accept string) ([]byte, error) {
+func fetchBody(requestURL string, headers map[string]string, accept string, config requestConfig) ([]byte, error) {
 	var lastErr error
 	options := currentOptions()
 
 	for attempt := 0; attempt <= options.Retries; attempt++ {
-		body, err, retryAfter := doRequest(requestURL, headers, accept, attempt)
+		body, err, retryAfter := doRequest(requestURL, headers, accept, attempt, config)
 		if err == nil {
 			return body, nil
 		}
@@ -78,7 +78,7 @@ func fetchBody(requestURL string, headers map[string]string, accept string) ([]b
 	return nil, lastErr
 }
 
-func doRequest(requestURL string, headers map[string]string, accept string, attempt int) ([]byte, error, time.Duration) {
+func doRequest(requestURL string, headers map[string]string, accept string, attempt int, config requestConfig) ([]byte, error, time.Duration) {
 	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err, 0
@@ -92,13 +92,13 @@ func doRequest(requestURL string, headers map[string]string, accept string, atte
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err, defaultRetryDelay(attempt)
+		return nil, err, retryBaseDelay(config, attempt)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
-		return nil, err, defaultRetryDelay(attempt)
+		return nil, err, retryBaseDelay(config, attempt)
 	}
 
 	switch resp.StatusCode {
@@ -110,7 +110,7 @@ func doRequest(requestURL string, headers map[string]string, accept string, atte
 			StatusCode: resp.StatusCode,
 			Status:     resp.Status,
 			Body:       bodySnippet(body),
-		}, retryDelay(attempt, resp.Header.Get("Retry-After"))
+		}, retryDelay(attempt, resp.Header.Get("Retry-After"), config)
 	}
 
 	return body, nil, 0
@@ -160,7 +160,7 @@ func IsDNSNotFound(err error) bool {
 	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
-func retryDelay(attempt int, headerValue string) time.Duration {
+func retryDelay(attempt int, headerValue string, config requestConfig) time.Duration {
 	if seconds, err := strconv.Atoi(strings.TrimSpace(headerValue)); err == nil && seconds > 0 {
 		return time.Duration(seconds) * time.Second
 	}
@@ -171,11 +171,19 @@ func retryDelay(attempt int, headerValue string) time.Duration {
 		}
 	}
 
-	return defaultRetryDelay(attempt)
+	return retryBaseDelay(config, attempt)
 }
 
-func defaultRetryDelay(attempt int) time.Duration {
-	return time.Duration(attempt+1) * 2 * time.Second
+func decodeJSON(body []byte, target any) error {
+	if len(body) == 0 {
+		return nil
+	}
+
+	if err := json.Unmarshal(body, target); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+
+	return nil
 }
 
 func bodySnippet(body []byte) string {

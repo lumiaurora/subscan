@@ -1,0 +1,11 @@
+{
+  "has_next": true,
+  "passive_dns": [
+    {
+      "hostname": "www.example.com"
+    },
+    {
+      "hostname": "mail.example.com"
+    }
+  ]
+}

@@ -1,11 +1,17 @@
 package sources
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
+
+var bufferOverRequestConfig = requestConfig{
+	RetryBaseDelay: 3 * time.Second,
+}
 
 type bufferOverResponse struct {
 	FDNSA  []string `json:"FDNS_A"`
@@ -16,12 +22,26 @@ type bufferOverResponse struct {
 func FetchBufferOver(domain string) ([]string, error) {
 	requestURL := fmt.Sprintf("https://dns.bufferover.run/dns?q=%s", url.QueryEscape("."+domain))
 
-	var response bufferOverResponse
-	if err := fetchJSON(requestURL, &response); err != nil {
+	body, err := fetchBody(requestURL, nil, "application/json", bufferOverRequestConfig)
+	if err != nil {
 		if IsDNSNotFound(err) {
-			return nil, errors.New("service endpoint dns.bufferover.run does not currently resolve")
+			return nil, degradedSourceError("BufferOver endpoint dns.bufferover.run does not currently resolve", err)
 		}
 
+		return nil, classifyBufferOverError(err)
+	}
+
+	results, err := parseBufferOverResponse(body)
+	if err != nil {
+		return nil, degradedSourceError("BufferOver returned invalid JSON", err)
+	}
+
+	return results, nil
+}
+
+func parseBufferOverResponse(body []byte) ([]string, error) {
+	var response bufferOverResponse
+	if err := decodeJSON(body, &response); err != nil {
 		return nil, err
 	}
 
@@ -45,6 +65,22 @@ func FetchBufferOver(domain string) ([]string, error) {
 	}
 
 	return results, nil
+}
+
+func classifyBufferOverError(err error) error {
+	switch {
+	case IsStatusCode(err, 429):
+		return rateLimitedSourceError("BufferOver is rate limiting requests", err)
+	case IsStatusCode(err, 502), IsStatusCode(err, 503), IsStatusCode(err, 504):
+		return degradedSourceError("BufferOver is temporarily unavailable", err)
+	default:
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			return degradedSourceError("BufferOver returned malformed JSON", err)
+		}
+
+		return degradedSourceError("BufferOver request failed", err)
+	}
 }
 
 func parseBufferOverEntry(entry string) string {

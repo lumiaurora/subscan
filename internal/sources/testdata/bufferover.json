@@ -1,0 +1,11 @@
+{
+  "FDNS_A": [
+    "1.1.1.1,www.example.com"
+  ],
+  "RDNS": [
+    "2.2.2.2,mail.example.com"
+  ],
+  "Results": [
+    "mx.example.com"
+  ]
+}

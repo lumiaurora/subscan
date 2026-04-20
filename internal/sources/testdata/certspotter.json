@@ -1,0 +1,13 @@
+[
+  {
+    "dns_names": [
+      "www.example.com",
+      "api.example.com"
+    ]
+  },
+  {
+    "dns_names": [
+      "mail.example.com"
+    ]
+  }
+]

@@ -25,8 +25,10 @@ Because it relies on third-party public datasets, it is safer and quieter than a
 - per-run source selection with `--source` and `--exclude-source`
 - configurable concurrency, timeout, retries, and verbose logging
 - config file support for API keys and default runtime settings
+- source health reporting with `enabled`, `disabled`, `degraded`, `auth-required`, and `rate-limited` states
+- fixture-backed parser tests for every passive source
 - normalization, wildcard cleanup, domain filtering, and deduplication
-- optional concurrent DNS resolution checks with `--resolve`
+- optional concurrent DNS resolution checks with wildcard DNS filtering when `--resolve` is enabled
 - export to JSON or TXT
 - clean terminal output with source progress and summary counts
 - resilient error handling so one source failure does not stop the run
@@ -178,6 +180,10 @@ You can inspect the currently enabled source set at runtime with:
 subscan --sources
 ```
 
+`--sources` now prints source health information so optional providers show up clearly as `enabled` or `disabled` before a run starts.
+
+During enumeration, failed providers are reported with explicit runtime health states such as `rate-limited`, `auth-required`, or `degraded` instead of a generic failure message.
+
 ### Config file
 
 Default config file path:
@@ -295,17 +301,19 @@ $ subscan -d example.com --resolve --json --output results.json
 [+] Target: example.com
 [+] Querying crt.sh...
 [+] Querying AlienVault OTX...
- [+] Querying Cert Spotter...
- [+] Querying RapidDNS...
- [+] Querying urlscan...
- [+] RapidDNS returned 23 candidate(s)
- [+] Cert Spotter returned 27 candidate(s)
- [+] urlscan returned 12 candidate(s)
- [+] crt.sh returned 21 candidate(s)
- [+] Raw results: 83
- [+] Unique subdomains: 19
- [+] Resolving discovered hosts...
- [+] Live subdomains: 11
+[!] AlienVault OTX [rate-limited]: AlienVault OTX is rate limiting anonymous requests; set OTX_API_KEY to improve reliability
+[+] Querying Cert Spotter...
+[+] Querying RapidDNS...
+[+] Querying urlscan...
+[+] RapidDNS returned 23 candidate(s)
+[+] Cert Spotter returned 27 candidate(s)
+[+] urlscan returned 12 candidate(s)
+[+] crt.sh returned 21 candidate(s)
+[+] Raw results: 83
+[+] Unique subdomains: 19
+[+] Resolving discovered hosts...
+[+] Wildcard-filtered subdomains: 2
+[+] Live subdomains: 11
 [+] Results written to results.json
 
 api.example.com
@@ -332,17 +340,17 @@ vpn.example.com
 
 ## Source coverage notes
 
-This MVP uses public passive sources that can change, rate limit, retire, or return incomplete data over time. The tool is designed to continue running when one source fails, but enumeration quality depends on the availability and freshness of those public datasets.
+`subscan` uses public passive sources that can change, rate limit, retire, or return incomplete data over time. The tool is designed to continue running when one source fails, but enumeration quality depends on the availability and freshness of those public datasets.
 
-Some providers are best-effort only. For example, public OTX access may return `429 Too Many Requests`, and BufferOver has been intermittently unavailable from some networks. `subscan` now includes additional passive sources so one flaky provider does not make the tool unusable.
+Some providers are best-effort only. For example, public OTX access may return `429 Too Many Requests`, and BufferOver has been intermittently unavailable from some networks. `subscan` classifies those runtime failures as `rate-limited`, `auth-required`, or `degraded`, and every parser is covered by a local fixture test so upstream response format changes are easier to catch during development.
 
 ## Architecture
 
 - `main.go`: CLI parsing, config loading, source selection, orchestration, and terminal UX
 - `internal/config`: JSON config file loading and default config path handling
-- `internal/sources`: passive source clients, shared HTTP logic, retries, API key handling, and verbose request diagnostics
+- `internal/sources`: passive source clients, source-specific parsing, health classification, retries/backoff, API key handling, and verbose request diagnostics
 - `internal/utils`: normalization, wildcard cleanup, filtering, and deduplication
-- `internal/resolver`: concurrent DNS resolution with configurable worker and timeout settings
+- `internal/resolver`: concurrent DNS resolution with configurable worker and timeout settings plus wildcard DNS detection
 - `internal/output`: TXT and JSON exporters
 
 ## Disclaimer

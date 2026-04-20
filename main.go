@@ -180,10 +180,15 @@ func main() {
 	finalResults := unique
 	if *resolveFlag {
 		fmt.Println("[+] Resolving discovered hosts...")
-		finalResults = resolver.ResolveSubdomains(unique, resolver.Options{
+		resolveResult := resolver.ResolveSubdomains(unique, resolver.Options{
 			Workers:       *threadsFlag,
 			LookupTimeout: timeout,
+			TargetDomain:  domain,
 		})
+		finalResults = resolveResult.Live
+		if resolveResult.WildcardFiltered > 0 {
+			fmt.Printf("[+] Wildcard-filtered subdomains: %d\n", resolveResult.WildcardFiltered)
+		}
 		fmt.Printf("[+] Live subdomains: %d\n", len(finalResults))
 	}
 
@@ -243,10 +248,12 @@ func querySources(domain string, sourceList []sourceDefinition, threads int, ver
 
 	for result := range results {
 		if result.err != nil {
+			health := sources.ErrorHealth(result.err)
+			message := sources.ErrorMessage(result.err)
 			if verbose {
-				fmt.Printf("[!] %s failed after %s: %v\n", result.source.name, formatDuration(result.duration), result.err)
+				fmt.Printf("[!] %s [%s] after %s: %s\n", result.source.name, health, formatDuration(result.duration), message)
 			} else {
-				fmt.Printf("[!] %s failed: %v\n", result.source.name, result.err)
+				fmt.Printf("[!] %s [%s]: %s\n", result.source.name, health, message)
 			}
 			continue
 		}
@@ -333,7 +340,7 @@ func selectSources(registry []sourceDefinition, include []string, exclude []stri
 func printSources(registry []sourceDefinition, selected []sourceDefinition) {
 	fmt.Println("[+] Selected passive sources:")
 	for _, source := range selected {
-		fmt.Printf("    - %s (%s)\n", source.name, source.id)
+		fmt.Printf("    - %s (%s) [%s]\n", source.name, source.id, sourceAvailability(source))
 	}
 
 	disabled := disabledOptionalSources(registry)
@@ -343,8 +350,16 @@ func printSources(registry []sourceDefinition, selected []sourceDefinition) {
 
 	fmt.Println("[+] Optional passive sources not enabled:")
 	for _, source := range disabled {
-		fmt.Printf("    - %s (%s) - %s\n", source.name, source.id, source.enableHint)
+		fmt.Printf("    - %s (%s) [%s] - %s\n", source.name, source.id, sources.HealthDisabled, source.enableHint)
 	}
+}
+
+func sourceAvailability(source sourceDefinition) sources.Health {
+	if sourceIsEnabled(source) {
+		return sources.HealthEnabled
+	}
+
+	return sources.HealthDisabled
 }
 
 func disabledOptionalSources(registry []sourceDefinition) []sourceDefinition {

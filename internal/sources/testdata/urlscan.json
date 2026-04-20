@@ -1,0 +1,20 @@
+{
+  "results": [
+    {
+      "task": {
+        "domain": "www.example.com"
+      },
+      "page": {
+        "domain": "app.example.com"
+      }
+    },
+    {
+      "task": {
+        "domain": "blog.example.com"
+      },
+      "page": {
+        "domain": "www.example.com"
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+[
+  {
+    "name_value": "www.example.com\napi.example.com"
+  },
+  {
+    "name_value": "*.mail.example.com"
+  }
+]
