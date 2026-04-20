@@ -33,12 +33,13 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false
 
       - name: Build release binary
         env:
@@ -49,6 +50,6 @@ jobs:
           go build -trimpath -ldflags "-s -w" -o "dist/subscan_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}" .
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/subscan_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}
